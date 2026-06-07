@@ -112,6 +112,15 @@ class UserSetting: ObservableObject {
             defaults.set(powerSaver, forKey: "powerSaver")
         }
     }
+
+    static let pauseOnFocusLossChangedNotification = Notification.Name("UserSetting.pauseOnFocusLossChanged")
+
+    @Published var pauseOnFocusLoss = false {
+        didSet {
+            defaults.set(pauseOnFocusLoss, forKey: "pauseOnFocusLoss")
+            NotificationCenter.default.post(name: Self.pauseOnFocusLossChangedNotification, object: nil)
+        }
+    }
     
     static let adaptiveModeChangedNotification = Notification.Name("UserSetting.adaptiveModeChanged")
 
@@ -134,7 +143,8 @@ class UserSetting: ObservableObject {
         self.launchAtLogin = getlaunchAtLogin()
         self.doNotShowWindow = getdoNotShowWindow()
         self.powerSaver = getPowerSaver()
-        
+        self.pauseOnFocusLoss = defaults.bool(forKey: "pauseOnFocusLoss")
+
         self.adaptiveMode = defaults.bool(forKey: "adaptiveMode")
         
         migrate()

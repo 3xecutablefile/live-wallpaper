@@ -42,8 +42,17 @@ struct SettingView: View {
                     .padding(.top)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text("""
-                    The video wallpaper's rendering will automatically pause when its window is fully (or near fully) obscured by other applications, reducing GPU/CPU usage and power consumption. 
+                    The video wallpaper's rendering will automatically pause when its window is fully (or near fully) obscured by other applications, reducing GPU/CPU usage and power consumption.
                     Audio playback remains active.
+                    """)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Toggle("Pause on Focus Loss", isOn: $userSetting.pauseOnFocusLoss)
+                    .toggleStyle(.checkbox)
+                    .padding(.top)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("""
+                    The wallpaper plays for 2 seconds after you switch to another app, then gracefully freezes. It resumes when you return to the desktop.
                     """)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 

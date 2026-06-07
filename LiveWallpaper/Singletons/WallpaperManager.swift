@@ -9,9 +9,11 @@ class WallpaperManager: ObservableObject {
     @Published var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     
-    private var timer:Timer?
+    private var timer: Timer?
     private var didAutoPaused = false
-    
+    private var didFocusPaused = false
+    private var focusPauseWorkItem: DispatchWorkItem?
+
     private var isPlayingBeforeSleep = false
     
     private init() {
@@ -28,21 +30,32 @@ class WallpaperManager: ObservableObject {
         RunLoop.main.add(timer!, forMode: .common)
         
         let workspace = NSWorkspace.shared.notificationCenter
-        // Register for wake notification
         workspace.addObserver(
             self,
             selector: #selector(handleWake),
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
-        // Register for sleep notification
         workspace.addObserver(
             self,
             selector: #selector(handleSleep),
             name: NSWorkspace.willSleepNotification,
             object: nil
         )
-        
+        workspace.addObserver(
+            self,
+            selector: #selector(handleAppActivation(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePauseOnFocusLossSettingChanged),
+            name: UserSetting.pauseOnFocusLossChangedNotification,
+            object: nil
+        )
+
     } // Singleton
     
     @objc private func handleWake() {
@@ -68,23 +81,31 @@ class WallpaperManager: ObservableObject {
     
     /// Creates the wallpaper window if not already created
     private func createWallpaperWindow() {
-        
+
         guard window == nil, let screen = NSScreen.main else { return }
-        
+
         let newWindow = NSWindow(
             contentRect: screen.frame,
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        
+
         newWindow.isOpaque = false
         newWindow.backgroundColor = .clear
         newWindow.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow))) // Behind icons
         newWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         newWindow.ignoresMouseEvents = true
         newWindow.makeKeyAndOrderFront(nil)
-        
+
+        // Use a plain NSView as the content view so snapshot overlays can be added
+        // as siblings of the NSHostingView — adding subviews to NSHostingView directly
+        // is unsupported on macOS Tahoe and later.
+        let wrapper = NSView(frame: screen.frame)
+        wrapper.wantsLayer = true
+        wrapper.autoresizingMask = [.width, .height]
+        newWindow.contentView = wrapper
+
         self.window = newWindow
     }
     
@@ -96,10 +117,13 @@ class WallpaperManager: ObservableObject {
             return
         }
         
+        focusPauseWorkItem?.cancel()
+        focusPauseWorkItem = nil
+        didAutoPaused = false
+        didFocusPaused = false
         for track in player?.currentItem?.tracks ?? [] {
             removeSnapshot()
             track.isEnabled = true
-            didAutoPaused = false
         }
         
         if window == nil {
@@ -116,48 +140,43 @@ class WallpaperManager: ObservableObject {
         
         let playerView = PlayerLayerView(player: player!, video: video)
         let hostView = NSHostingView(rootView: playerView)
-        animateContentViewTransition(window: window, newContentView: hostView)
+        animateContentViewTransition(newContentView: hostView)
         
         player!.play()
     }
     
 
-    private func animateContentViewTransition(window: NSWindow?, newContentView: NSView) {
-        guard let window = window else {return}
-        // Ensure both old and new views are layer-backed
-        window.contentView?.wantsLayer = true
+    private func animateContentViewTransition(newContentView: NSView) {
+        guard let wrapper = window?.contentView else { return }
+
         newContentView.wantsLayer = true
-        
-        // Start with the new view invisible
         newContentView.alphaValue = 0
-        
-        // Temporarily add the new view as a subview of the current content view
-        window.contentView?.addSubview(newContentView)
-        
-        // Match the new view's frame to the window's content view
-        newContentView.frame = window.contentView?.bounds ?? .zero
+        newContentView.frame = wrapper.bounds
         newContentView.autoresizingMask = [.width, .height]
-        
-        // Animate the transition
+
+        // Insert below any snapshot overlay so it remains visible during transition
+        let snapshot = wrapper.subviews.first { $0.identifier?.rawValue == "SnapshotOverlay" }
+        if let snapshot {
+            wrapper.addSubview(newContentView, positioned: .below, relativeTo: snapshot)
+        } else {
+            wrapper.addSubview(newContentView)
+        }
+
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.5 // Adjust duration as needed (e.g., 0.5 seconds)
+            context.duration = 0.5
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            
-            // Fade out the old content view
-            window.contentView?.subviews.forEach { view in
-                if view != newContentView {
+            wrapper.subviews.forEach { view in
+                if view !== newContentView && view.identifier?.rawValue != "SnapshotOverlay" {
                     view.animator().alphaValue = 0
                 }
             }
-            
-            // Fade in the new content view
             newContentView.animator().alphaValue = 1
         } completionHandler: {
-            // After animation, set the new view as the content view
-            window.contentView = newContentView
-            
-            // Reset alpha to ensure consistency
-            newContentView.alphaValue = 1
+            wrapper.subviews.forEach { view in
+                if view !== newContentView && view.identifier?.rawValue != "SnapshotOverlay" {
+                    view.removeFromSuperview()
+                }
+            }
         }
     }
     
@@ -187,34 +206,91 @@ class WallpaperManager: ObservableObject {
         objectWillChange.send()
     }
     
-    func destroy(){
+    func destroy() {
+        focusPauseWorkItem?.cancel()
+        focusPauseWorkItem = nil
+        didAutoPaused = false
+        didFocusPaused = false
         looper = nil
         player?.removeAllItems()
         player = nil
         window?.contentView = nil
+        window = nil
     }
     
-    private func autoPauseVideo(){
-        if UserSetting.shared.powerSaver && !didAutoPaused {
-            for track in player?.currentItem?.tracks ?? [] {
-                if track.assetTrack?.hasMediaCharacteristic(.visual) == true {
+    private func autoPauseVideo() {
+        guard UserSetting.shared.powerSaver && !didAutoPaused else { return }
+        for track in player?.currentItem?.tracks ?? [] {
+            if track.assetTrack?.hasMediaCharacteristic(.visual) == true {
+                didAutoPaused = true
+                if !didFocusPaused {
                     takeSnapshot()
                     track.isEnabled = false
-                    didAutoPaused = true
-                    print("auto paused")
                 }
             }
         }
     }
-    
-    private func autoResumeVideo(){
-        if didAutoPaused {
-            for track in player?.currentItem?.tracks ?? [] {
-                removeSnapshot()
-                track.isEnabled = true
-                didAutoPaused = false
-                print("auto resumed")
+
+    private func autoResumeVideo() {
+        guard didAutoPaused else { return }
+        didAutoPaused = false
+        guard !didFocusPaused else { return }
+        player?.currentItem?.tracks.forEach { $0.isEnabled = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.removeSnapshot()
+        }
+    }
+
+    @objc private func handleAppActivation(_ notification: Notification) {
+        guard UserSetting.shared.pauseOnFocusLoss else { return }
+
+        let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        let bundleId = activated?.bundleIdentifier ?? ""
+        let isDesktop = bundleId == "com.apple.finder"
+        let isSelf = bundleId == Bundle.main.bundleIdentifier
+
+        if isDesktop || isSelf {
+            focusPauseWorkItem?.cancel()
+            focusPauseWorkItem = nil
+            focusResumeVideo()
+        } else {
+            focusPauseWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                self?.focusPauseVideo()
             }
+            focusPauseWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
+        }
+    }
+
+    @objc private func handlePauseOnFocusLossSettingChanged() {
+        if !UserSetting.shared.pauseOnFocusLoss {
+            focusPauseWorkItem?.cancel()
+            focusPauseWorkItem = nil
+            focusResumeVideo()
+        }
+    }
+
+    private func focusPauseVideo() {
+        guard !didFocusPaused else { return }
+        for track in player?.currentItem?.tracks ?? [] {
+            if track.assetTrack?.hasMediaCharacteristic(.visual) == true {
+                didFocusPaused = true
+                if !didAutoPaused {
+                    takeSnapshot()
+                    track.isEnabled = false
+                }
+            }
+        }
+    }
+
+    private func focusResumeVideo() {
+        guard didFocusPaused else { return }
+        didFocusPaused = false
+        guard !didAutoPaused else { return }
+        player?.currentItem?.tracks.forEach { $0.isEnabled = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.removeSnapshot()
         }
     }
     
@@ -264,7 +340,9 @@ class WallpaperManager: ObservableObject {
                     context.duration = 0.5
                     subview.animator().alphaValue = 0
                 }, completionHandler: {
-                    subview.removeFromSuperview()
+                    if subview.superview != nil {
+                        subview.removeFromSuperview()
+                    }
                 })
             }
         }
