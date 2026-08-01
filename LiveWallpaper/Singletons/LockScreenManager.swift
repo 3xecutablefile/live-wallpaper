@@ -237,6 +237,12 @@ class LockScreenManager: ObservableObject {
             let thumbDest = thumbnailsPath.appendingPathComponent("\(assetID).png")
 
             try FileManager.default.copyItem(at: videoURL, to: videoDest)
+
+            // Remux with the moov atom at the front (faststart) — otherwise the
+            // lock screen player reads the whole file before playback starts
+            // (a visible pause on lock). ffmpeg -c copy is a remux, no re-encode.
+            faststartVideo(at: videoDest)
+
             let thumbnail = try makeThumbnail(from: videoURL)
             try thumbnail.write(to: thumbDest)
 
@@ -664,6 +670,39 @@ class LockScreenManager: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Remux a video so its moov atom sits at the front of the file (faststart),
+    /// using ffmpeg's stream copy (no re-encode, no quality loss).
+    private func faststartVideo(at url: URL) {
+        let candidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+        guard let ffmpeg = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            return
+        }
+
+        // Write the temp into the system tmp dir, not the aerial store, so a
+        // mid-remux crash can't leave an orphan .faststart.mov in Apple's store.
+        // Same APFS volume on macOS, so moveItem still works.
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).faststart.mov")
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let task = Process()
+        task.launchPath = ffmpeg
+        task.arguments = ["-y", "-v", "error", "-i", url.path, "-c", "copy", "-movflags", "+faststart", temp.path]
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+            guard task.terminationStatus == 0, FileManager.default.fileExists(atPath: temp.path) else {
+                return
+            }
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: temp, to: url)
+        } catch {
+            // Non-fatal: keep the original copy if the remux fails.
+            return
+        }
+    }
 
     private func restartWallpaperAgent() {
         for processName in ["WallpaperAgent", "legacyScreenSaver", "idleassetsd"] {
