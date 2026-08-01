@@ -1,0 +1,54 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build LiveWallpaper and create release
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build .app (swiftc hand-assembly)
+        run: |
+          chmod +x scripts/build-release.sh
+          scripts/build-release.sh
+        shell: bash
+
+      - name: Upload build artifact (workflow run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveWallpaper-app
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.1.0.${{ github.run_number }}
+          name: LiveWallpaper v1.1.0.${{ github.run_number }}
+          body: |
+            Automated build from `${{ github.sha }}` (${{ github.ref_name }}).
+
+            - Version: `1.1.0.${{ github.run_number }}`
+            - Ad-hoc signed, sandbox disabled (required to register lock-screen aerials)
+            - Includes native lock screen wallpaper support (manifest registration) + faststart video remux
+            - **Apple Silicon only** (arm64 build)
+          files: dist/*.zip
+          fail_on_unmatched_files: true
+          update_release_body: true
+          generate_release_notes: false
