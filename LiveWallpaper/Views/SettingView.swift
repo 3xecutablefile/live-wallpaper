@@ -9,6 +9,7 @@ import SwiftUI
 struct SettingView: View {
     
     @ObservedObject var userSetting = UserSetting.shared
+    @ObservedObject var lockScreenManager = LockScreenManager.shared
     
     
     var body: some View {
@@ -65,6 +66,53 @@ struct SettingView: View {
                     """)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 
+                Text("Lock Screen")
+                    .fontWeight(.bold)
+                    .frame(maxWidth:.infinity, alignment: .leading)
+                    .padding(.top, 20)
+                    .padding(.bottom, 10)
+                
+                Text("""
+                    Replaces the system's lock-screen aerial videos with your current wallpaper video — natively, no screensaver plugin required.
+                    """)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(.secondary)
+                
+                HStack {
+                    if lockScreenManager.isReplaced {
+                        Button {
+                            restoreLockScreen()
+                        } label: {
+                            Text("Restore Original Lock Screen")
+                        }
+                        .disabled(lockScreenManager.isBusy)
+                        Text("✓ Custom video active")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else {
+                        Button {
+                            setAsLockScreen()
+                        } label: {
+                            if lockScreenManager.isBusy {
+                                Text("Working…")
+                            } else {
+                                Text("Set Current Video as Lock Screen")
+                            }
+                        }
+                        .disabled(userSetting.video.url.isEmpty || lockScreenManager.isBusy)
+                    }
+                    Spacer()
+                }
+                .padding(.top, 5)
+                
+                if let err = lockScreenManager.lastError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
+                
                 Text("App Data")
                     .fontWeight(.bold)
                     .frame(maxWidth:.infinity, alignment: .leading)
@@ -103,6 +151,14 @@ struct SettingView: View {
     func copyToClipboard(_ string: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string, forType: .string)
+    }
+    
+    private func setAsLockScreen() {
+        lockScreenManager.replaceLockScreenVideo(with: userSetting.video) { _ in }
+    }
+    
+    private func restoreLockScreen() {
+        lockScreenManager.restoreLockScreenVideo { _ in }
     }
     
     func confirmAndClearAppData() {

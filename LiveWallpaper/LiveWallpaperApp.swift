@@ -48,6 +48,8 @@ struct MenuBarView: View {
     
     @ObservedObject var wallpaperManager = WallpaperManager.shared
     @ObservedObject var userSetting = UserSetting.shared
+    @ObservedObject var lockScreenManager = LockScreenManager.shared
+    @State private var lockScreenToast: String?
     
     var body: some View {
         VStack {
@@ -90,12 +92,73 @@ struct MenuBarView: View {
             
             Divider()
             
+            // Lock Screen section
+            if lockScreenManager.isReplaced {
+                Text("Lock Screen: custom video")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                
+                Button("Restore Original Lock Screen") {
+                    restoreLockScreen()
+                }
+                .disabled(lockScreenManager.isBusy)
+            } else {
+                Button {
+                    setAsLockScreen()
+                } label: {
+                    if lockScreenManager.isBusy {
+                        Text("Working…")
+                    } else {
+                        Text("Set Current Video as Lock Screen")
+                    }
+                }
+                .disabled(userSetting.video.url.isEmpty || lockScreenManager.isBusy)
+                
+            if let err = lockScreenManager.lastError {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            
+            if let toast = lockScreenToast {
+                Text(toast)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            
+            Divider()
+            
             Button("Quit") {
                 NSApp.terminate(nil)
             }
         }
         
         
+    }
+    
+    private func setAsLockScreen() {
+        lockScreenManager.replaceLockScreenVideo(with: userSetting.video) { result in
+            switch result {
+            case .success:
+                lockScreenToast = "Lock screen set ✓"
+            case .failure(let error):
+                lockScreenToast = error.localizedDescription
+            }
+        }
+    }
+    
+    private func restoreLockScreen() {
+        lockScreenManager.restoreLockScreenVideo { result in
+            switch result {
+            case .success:
+                lockScreenToast = "Lock screen restored ✓"
+            case .failure(let error):
+                lockScreenToast = error.localizedDescription
+            }
+        }
     }
     
 //    private func openMainWindow() {
