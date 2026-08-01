@@ -113,13 +113,13 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(userSetting.video.url.isEmpty || lockScreenManager.isBusy)
-                
+            }
+            
             if let err = lockScreenManager.lastError {
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             
             if let toast = lockScreenToast {
@@ -140,23 +140,35 @@ struct MenuBarView: View {
     }
     
     private func setAsLockScreen() {
+        lockScreenToast = nil
         lockScreenManager.replaceLockScreenVideo(with: userSetting.video) { result in
             switch result {
             case .success:
                 lockScreenToast = "Lock screen set ✓"
-            case .failure(let error):
-                lockScreenToast = error.localizedDescription
+                autoClearToast()
+            case .failure:
+                break // error already surfaced via lockScreenManager.lastError
             }
         }
     }
     
     private func restoreLockScreen() {
+        lockScreenToast = nil
         lockScreenManager.restoreLockScreenVideo { result in
             switch result {
             case .success:
                 lockScreenToast = "Lock screen restored ✓"
-            case .failure(let error):
-                lockScreenToast = error.localizedDescription
+                autoClearToast()
+            case .failure:
+                break // error already surfaced via lockScreenManager.lastError
+            }
+        }
+    }
+    
+    private func autoClearToast() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            withAnimation {
+                lockScreenToast = nil
             }
         }
     }

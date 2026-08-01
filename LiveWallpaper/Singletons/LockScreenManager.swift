@@ -392,10 +392,6 @@ class LockScreenManager: ObservableObject {
         return !findAllBackupFiles().isEmpty
     }
 
-    var backupCount: Int {
-        return findAllBackupFiles().count
-    }
-
     // MARK: - Helpers
 
     private func runShell(_ command: String) throws {
