@@ -65,6 +65,37 @@ enum VideoType: String, Codable {
     case youtube
 }
 
+enum WallpaperDisplayMode: String, CaseIterable {
+    case perDisplay
+    case spanAllDisplays
+
+    var displayName: String {
+        switch self {
+        case .perDisplay:
+            return "Per Display"
+        case .spanAllDisplays:
+            return "Span All Displays"
+        }
+    }
+}
+
+enum WallpaperScalingMode: String, CaseIterable {
+    case fill
+    case fit
+    case stretch
+
+    var displayName: String {
+        switch self {
+        case .fill:
+            return "Fill"
+        case .fit:
+            return "Fit"
+        case .stretch:
+            return "Stretch"
+        }
+    }
+}
+
 
 struct Sound: Codable {
     var name:String
@@ -123,11 +154,26 @@ class UserSetting: ObservableObject {
     }
     
     static let adaptiveModeChangedNotification = Notification.Name("UserSetting.adaptiveModeChanged")
+    static let wallpaperPresentationChangedNotification = Notification.Name("UserSetting.wallpaperPresentationChanged")
 
     @Published var adaptiveMode: Bool = false {
         didSet {
             defaults.set(adaptiveMode, forKey: "adaptiveMode")
             NotificationCenter.default.post(name: Self.adaptiveModeChangedNotification, object: nil)
+        }
+    }
+
+    @Published var wallpaperDisplayMode: WallpaperDisplayMode = .perDisplay {
+        didSet {
+            defaults.set(wallpaperDisplayMode.rawValue, forKey: "wallpaperDisplayMode")
+            NotificationCenter.default.post(name: Self.wallpaperPresentationChangedNotification, object: nil)
+        }
+    }
+
+    @Published var wallpaperScalingMode: WallpaperScalingMode = .fill {
+        didSet {
+            defaults.set(wallpaperScalingMode.rawValue, forKey: "wallpaperScalingMode")
+            NotificationCenter.default.post(name: Self.wallpaperPresentationChangedNotification, object: nil)
         }
     }
     
@@ -146,6 +192,8 @@ class UserSetting: ObservableObject {
         self.pauseOnFocusLoss = defaults.bool(forKey: "pauseOnFocusLoss")
 
         self.adaptiveMode = defaults.bool(forKey: "adaptiveMode")
+        self.wallpaperDisplayMode = getWallpaperDisplayMode()
+        self.wallpaperScalingMode = getWallpaperScalingMode()
         
         migrate()
     }
@@ -248,6 +296,22 @@ class UserSetting: ObservableObject {
         if let savedData = defaults.data(forKey: "sounds"),
            let sounds = try? JSONDecoder().decode([Sound].self, from: savedData) {
             return sounds
+        }
+
+        func getWallpaperDisplayMode() -> WallpaperDisplayMode {
+            guard let rawValue = defaults.string(forKey: "wallpaperDisplayMode"),
+                  let mode = WallpaperDisplayMode(rawValue: rawValue) else {
+                return .perDisplay
+            }
+            return mode
+        }
+
+        func getWallpaperScalingMode() -> WallpaperScalingMode {
+            guard let rawValue = defaults.string(forKey: "wallpaperScalingMode"),
+                  let mode = WallpaperScalingMode(rawValue: rawValue) else {
+                return .fill
+            }
+            return mode
         }
         
         let mp3s = [

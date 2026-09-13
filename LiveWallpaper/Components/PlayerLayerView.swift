@@ -24,7 +24,6 @@ class CustomPlayerView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
 
         playerLayer.player = player
-        playerLayer.videoGravity = .resizeAspectFill
         playerLayer.backgroundColor = NSColor.clear.cgColor
 
         layer?.addSublayer(playerLayer)
@@ -48,6 +47,13 @@ class CustomPlayerView: NSView {
             name: UserSetting.adaptiveModeChangedNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(updateVideoGravity),
+            name: UserSetting.wallpaperPresentationChangedNotification,
+            object: nil
+        )
+        updateVideoGravity()
     }
     
     
@@ -73,8 +79,20 @@ class CustomPlayerView: NSView {
 
     }
 
+    @objc func updateVideoGravity() {
+        switch UserSetting.shared.wallpaperScalingMode {
+        case .fill:
+            playerLayer.videoGravity = .resizeAspectFill
+        case .fit:
+            playerLayer.videoGravity = .resizeAspect
+        case .stretch:
+            playerLayer.videoGravity = .resize
+        }
+    }
+
     override func layout() {
         super.layout()
+        updateVideoGravity()
         playerLayer.frame = bounds
         darkLayer.frame = bounds
     }
@@ -93,6 +111,7 @@ struct PlayerLayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        // No need to update anything dynamically
+        guard let playerView = nsView as? CustomPlayerView else { return }
+        playerView.updateVideoGravity()
     }
 }
