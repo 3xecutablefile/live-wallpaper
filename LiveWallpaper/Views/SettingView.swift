@@ -65,6 +65,38 @@ struct SettingView: View {
                     Adapt to your device dark/light theme
                     """)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("Wallpaper Layout")
+                    .fontWeight(.bold)
+                    .frame(maxWidth:.infinity, alignment: .leading)
+                    .padding(.top, 20)
+                    .padding(.bottom, 10)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Multi-display arrangement")
+                        .font(.subheadline)
+                    Picker("Multi-display arrangement", selection: $userSetting.wallpaperDisplayMode) {
+                        ForEach(WallpaperDisplayMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Scaling")
+                        .font(.subheadline)
+                    Picker("Scaling", selection: $userSetting.wallpaperScalingMode) {
+                        ForEach(WallpaperScalingMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 
                 Text("Lock Screen")
                     .fontWeight(.bold)
@@ -187,4 +219,3 @@ struct SettingView: View {
     }
 
 }
-

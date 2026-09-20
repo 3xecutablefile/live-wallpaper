@@ -9,6 +9,7 @@ import SwiftUI
 @main
 struct LiveWallpaperApp: App {
     
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     let userSetting = UserSetting.shared
     
     
@@ -41,6 +42,12 @@ struct LiveWallpaperApp: App {
     }
     
     
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
 }
 
 

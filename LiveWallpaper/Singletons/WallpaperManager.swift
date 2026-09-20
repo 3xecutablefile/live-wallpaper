@@ -5,7 +5,7 @@ import AVKit
 class WallpaperManager: ObservableObject {
     static let shared = WallpaperManager()
     
-    private var window: NSWindow?
+    private var windows: [NSWindow] = []
     @Published var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     
@@ -55,6 +55,18 @@ class WallpaperManager: ObservableObject {
             name: UserSetting.pauseOnFocusLossChangedNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWallpaperPresentationSettingChanged),
+            name: UserSetting.wallpaperPresentationChangedNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreenConfigurationChanged),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
 
     } // Singleton
     
@@ -79,34 +91,58 @@ class WallpaperManager: ObservableObject {
         }
     }
     
-    /// Creates the wallpaper window if not already created
-    private func createWallpaperWindow() {
+    /// Creates wallpaper windows according to current display mode
+    private func recreateWallpaperWindows() {
+        destroyWallpaperWindows()
+        let targetFrames = targetWallpaperFrames()
 
-        guard window == nil, let screen = NSScreen.main else { return }
+        for frame in targetFrames {
+            let window = NSWindow(
+                contentRect: frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
+            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+            window.ignoresMouseEvents = true
 
-        let newWindow = NSWindow(
-            contentRect: screen.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+            let wrapper = NSView(frame: CGRect(origin: .zero, size: frame.size))
+            wrapper.wantsLayer = true
+            wrapper.autoresizingMask = [.width, .height]
+            window.contentView = wrapper
+            window.makeKeyAndOrderFront(nil)
+            windows.append(window)
+        }
+    }
 
-        newWindow.isOpaque = false
-        newWindow.backgroundColor = .clear
-        newWindow.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow))) // Behind icons
-        newWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        newWindow.ignoresMouseEvents = true
-        newWindow.makeKeyAndOrderFront(nil)
+    private func destroyWallpaperWindows() {
+        for window in windows {
+            window.contentView = nil
+            window.orderOut(nil)
+            window.close()
+        }
+        windows.removeAll()
+    }
 
-        // Use a plain NSView as the content view so snapshot overlays can be added
-        // as siblings of the NSHostingView — adding subviews to NSHostingView directly
-        // is unsupported on macOS Tahoe and later.
-        let wrapper = NSView(frame: screen.frame)
-        wrapper.wantsLayer = true
-        wrapper.autoresizingMask = [.width, .height]
-        newWindow.contentView = wrapper
+    private func targetWallpaperFrames() -> [CGRect] {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return [] }
 
-        self.window = newWindow
+        let sortedFrames = screens.map(\.frame).sorted {
+            if $0.minX == $1.minX {
+                return $0.minY < $1.minY
+            }
+            return $0.minX < $1.minX
+        }
+
+        if UserSetting.shared.wallpaperDisplayMode == .spanAllDisplays {
+            return [sortedFrames.dropFirst().reduce(sortedFrames[0]) { $0.union($1) }]
+        }
+
+        return sortedFrames
     }
     
     /// Sets or updates the wallpaper video URL
@@ -126,9 +162,7 @@ class WallpaperManager: ObservableObject {
             track.isEnabled = true
         }
         
-        if window == nil {
-            createWallpaperWindow()
-        }
+        recreateWallpaperWindows()
         
         let playerItem = AVPlayerItem(url: url)
         
@@ -138,16 +172,22 @@ class WallpaperManager: ObservableObject {
         player = AVQueuePlayer()
         looper = AVPlayerLooper(player: player!, templateItem: playerItem)
         
-        let playerView = PlayerLayerView(player: player!, video: video)
-        let hostView = NSHostingView(rootView: playerView)
-        animateContentViewTransition(newContentView: hostView)
+        attachPlayerViews(video: video)
         
         player!.play()
     }
     
+    private func attachPlayerViews(video: Video) {
+        guard let player else { return }
+        for window in windows {
+            let playerView = PlayerLayerView(player: player, video: video)
+            let hostView = NSHostingView(rootView: playerView)
+            animateContentViewTransition(in: window, newContentView: hostView)
+        }
+    }
 
-    private func animateContentViewTransition(newContentView: NSView) {
-        guard let wrapper = window?.contentView else { return }
+    private func animateContentViewTransition(in window: NSWindow, newContentView: NSView) {
+        guard let wrapper = window.contentView else { return }
 
         newContentView.wantsLayer = true
         newContentView.alphaValue = 0
@@ -214,8 +254,7 @@ class WallpaperManager: ObservableObject {
         looper = nil
         player?.removeAllItems()
         player = nil
-        window?.contentView = nil
-        window = nil
+        destroyWallpaperWindows()
     }
     
     private func autoPauseVideo() {
@@ -271,6 +310,18 @@ class WallpaperManager: ObservableObject {
         }
     }
 
+    @objc private func handleWallpaperPresentationSettingChanged() {
+        guard player != nil else { return }
+        recreateWallpaperWindows()
+        attachPlayerViews(video: UserSetting.shared.video)
+    }
+
+    @objc private func handleScreenConfigurationChanged() {
+        guard player != nil else { return }
+        recreateWallpaperWindows()
+        attachPlayerViews(video: UserSetting.shared.video)
+    }
+
     private func focusPauseVideo() {
         guard !didFocusPaused else { return }
         for track in player?.currentItem?.tracks ?? [] {
@@ -296,7 +347,7 @@ class WallpaperManager: ObservableObject {
     
     private func takeSnapshot(){
         guard let playerItem = player?.currentItem,
-              let rootView = window?.contentView else {
+              !windows.isEmpty else {
             return
         }
         // Take a snapshot of the current frame
@@ -309,41 +360,45 @@ class WallpaperManager: ObservableObject {
 
 
         // Overlay the snapshot to simulate a frozen frame
-        let imageView = NSImageViewFill()
-        imageView.image = snapshot
-        imageView.frame = rootView.bounds
-        imageView.autoresizingMask = [.width, .height]
-        imageView.identifier = NSUserInterfaceItemIdentifier("SnapshotOverlay")
-        
-        let showDarkLayer: Bool = {
-            guard UserSetting.shared.adaptiveMode else { return false }
+        for rootView in windows.compactMap(\.contentView) {
+            let imageView = NSImageViewFill()
+            imageView.image = snapshot
+            imageView.frame = rootView.bounds
+            imageView.autoresizingMask = [.width, .height]
+            imageView.identifier = NSUserInterfaceItemIdentifier("SnapshotOverlay")
+            
+            let showDarkLayer: Bool = {
+                guard UserSetting.shared.adaptiveMode else { return false }
 
-            let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            return isDark
-            ? true: false
-        }()
-        
-        if showDarkLayer {
-            imageView.layer?.addSublayer(createAdaptiveDarkModeOverlay(rect: rootView.bounds, characteristics: UserSetting.shared.video.attrs))
+                let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                return isDark
+                ? true: false
+            }()
+            
+            if showDarkLayer {
+                imageView.layer?.addSublayer(createAdaptiveDarkModeOverlay(rect: rootView.bounds, characteristics: UserSetting.shared.video.attrs))
+            }
+            rootView.addSubview(imageView, positioned: .above, relativeTo: nil)
         }
-        // Add to root view
-        rootView.addSubview(imageView, positioned: .above, relativeTo: nil)
     }
     
     private func removeSnapshot(){
-        guard let rootView = window?.contentView else {
+        let rootViews = windows.compactMap(\.contentView)
+        guard !rootViews.isEmpty else {
             return
         }
-        for subview in rootView.subviews {
-            if subview.identifier?.rawValue == "SnapshotOverlay" {
-                NSAnimationContext.runAnimationGroup({ context in
-                    context.duration = 0.5
-                    subview.animator().alphaValue = 0
-                }, completionHandler: {
-                    if subview.superview != nil {
-                        subview.removeFromSuperview()
-                    }
-                })
+        for rootView in rootViews {
+            for subview in rootView.subviews {
+                if subview.identifier?.rawValue == "SnapshotOverlay" {
+                    NSAnimationContext.runAnimationGroup({ context in
+                        context.duration = 0.5
+                        subview.animator().alphaValue = 0
+                    }, completionHandler: {
+                        if subview.superview != nil {
+                            subview.removeFromSuperview()
+                        }
+                    })
+                }
             }
         }
     }
@@ -369,7 +424,16 @@ class NSImageViewFill : NSImageView {
         open override var image: NSImage? {
             set {
                 self.layer = CALayer()
-                self.layer?.contentsGravity = CALayerContentsGravity.resizeAspectFill
+                let gravity: CALayerContentsGravity
+                switch UserSetting.shared.wallpaperScalingMode {
+                case .fill:
+                    gravity = .resizeAspectFill
+                case .fit:
+                    gravity = .resizeAspect
+                case .stretch:
+                    gravity = .resize
+                }
+                self.layer?.contentsGravity = gravity
                 self.layer?.contents = newValue
                 self.wantsLayer = true
                 
@@ -381,4 +445,3 @@ class NSImageViewFill : NSImageView {
             }
         }
 }
-
